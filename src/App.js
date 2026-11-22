@@ -39,21 +39,21 @@ function loadKeys() {
   } catch (e) {}
 
   return {
-    plantId: localStorage.getItem(LS_KEYS.plantIdKey) || FALLBACK_KEYS.plantId,
-    plantNet: localStorage.getItem(LS_KEYS.plantNetKey) || FALLBACK_KEYS.plantNet,
-    gemini: localStorage.getItem(LS_KEYS.geminiKey) || FALLBACK_KEYS.gemini,
-    firebaseUrl: localStorage.getItem(LS_KEYS.firebaseKey) || FALLBACK_KEYS.firebaseUrl,
+    plantId: (localStorage.getItem(LS_KEYS.plantIdKey) || FALLBACK_KEYS.plantId).trim(),
+    plantNet: (localStorage.getItem(LS_KEYS.plantNetKey) || FALLBACK_KEYS.plantNet).trim(),
+    gemini: (localStorage.getItem(LS_KEYS.geminiKey) || FALLBACK_KEYS.gemini).trim(),
+    firebaseUrl: (localStorage.getItem(LS_KEYS.firebaseKey) || FALLBACK_KEYS.firebaseUrl).trim(),
     customMissions: Array.isArray(custom) ? custom : [],
     teacherPin: localStorage.getItem(LS_KEYS.teacherPin) || "1234",
   };
 }
 
 function saveKeys(keysObj) {
-  localStorage.setItem(LS_KEYS.plantIdKey, keysObj.plantId || "");
-  localStorage.setItem(LS_KEYS.plantNetKey, keysObj.plantNet || "");
-  localStorage.setItem(LS_KEYS.geminiKey, keysObj.gemini || "");
-  localStorage.setItem(LS_KEYS.firebaseKey, keysObj.firebaseUrl || "");
-  localStorage.setItem(LS_KEYS.teacherPin, keysObj.teacherPin || "1234");
+  localStorage.setItem(LS_KEYS.plantIdKey, (keysObj.plantId || "").trim());
+  localStorage.setItem(LS_KEYS.plantNetKey, (keysObj.plantNet || "").trim());
+  localStorage.setItem(LS_KEYS.geminiKey, (keysObj.gemini || "").trim());
+  localStorage.setItem(LS_KEYS.firebaseKey, (keysObj.firebaseUrl || "").trim());
+  localStorage.setItem(LS_KEYS.teacherPin, (keysObj.teacherPin || "1234").trim());
   localStorage.setItem(
     LS_KEYS.customMissions,
     JSON.stringify(keysObj.customMissions || [])
@@ -483,7 +483,7 @@ export default function App() {
       const now = Date.now();
       if (keys.firebaseUrl && keys.firebaseUrl.trim() !== "") {
         try {
-          const baseUrl = keys.firebaseUrl.replace(/\/$/, "");
+          const baseUrl = keys.firebaseUrl.trim().replace(/\/$/, "");
           const res = await fetch(`${baseUrl}/scans.json`);
           const data = await res.json();
           if (data) {
@@ -503,6 +503,15 @@ export default function App() {
     }, 2500);
     return () => clearInterval(interval);
   }, [keys.firebaseUrl, screen]);
+
+  useEffect(() => {
+    // Cleanup op unmount van het component
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+      }
+    };
+  }, []);
 
   const openCamera = async (m) => {
     setScanMode(m);
@@ -659,7 +668,11 @@ export default function App() {
         if (!keys.gemini) throw new Error("Gemini API-sleutel ontbreekt.");
         const res = await callGemini(base64, keys.gemini, `Bioloog. Identificeer dit dier of insect. JSON: {"name":"Naam","scientificName":"Wetenschappelijk","klasse":"Klasse","familie":"Familie","leefgebied":"Habitat","leeftijd":"Schatting leeftijd","weetje":"Leuk weetje."}`);
         const entry = { id: Date.now(), date: new Date().toLocaleDateString("nl-BE"), image: dataUrl, type: "animal", score: 100, source: "Gemini AI", ...res };
-        setHistory(saveHistory([entry, ...history]));
+        setHistory(prev => {
+          const newList = [entry, ...prev];
+          saveHistory(newList);
+          return newList;
+        });
         setResult(entry);
         setScreen("result");
       } catch (err) {
@@ -673,7 +686,11 @@ export default function App() {
     try {
       const plantData = await identifyPlant(base64);
       const entry = { id: Date.now(), date: new Date().toLocaleDateString("nl-BE"), image: dataUrl, type: "plant", lastWatered: Date.now(), ...plantData };
-      setHistory(saveHistory([entry, ...history]));
+      setHistory(prev => {
+        const newList = [entry, ...prev];
+        saveHistory(newList);
+        return newList;
+      });
       setResult(entry);
       setScreen("result");
     } catch (err) {
@@ -704,7 +721,7 @@ export default function App() {
     const isCorrect = i === currentQuizQuestions[quizIndex].correct;
     if (isCorrect) setQuizScore((s) => s + 1);
 
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       if (quizIndex + 1 >= currentQuizQuestions.length) {
         if ((quizScore + (isCorrect ? 1 : 0)) / currentQuizQuestions.length >= 0.8) setScreen("diploma");
         else setScreen("quizResult");
@@ -713,13 +730,17 @@ export default function App() {
         setQuizAnswered(null);
       }
     }, 1500);
+    // Timer cleanup in handleQuizAnswer is lastig zonder useEffect, 
+    // maar we kunnen een ref gebruiken of accepteren dat deze kortstondig leeft.
   };
 
   const verwijderUitGeschiedenis = (id) => {
     if (window.confirm("Weet je zeker dat je deze scan wilt verwijderen?")) {
-      const updated = history.filter((item) => item.id !== id);
-      setHistory(updated);
-      localStorage.setItem(LS_KEYS.history, JSON.stringify(updated));
+      setHistory(prev => {
+        const updated = prev.filter((item) => item.id !== id);
+        localStorage.setItem(LS_KEYS.history, JSON.stringify(updated));
+        return updated;
+      });
     }
   };
 
@@ -737,6 +758,10 @@ export default function App() {
     const updatedKeys = { ...keys, customMissions: updatedMissions };
     setKeys(updatedKeys);
     saveKeys(updatedKeys);
+    // Reset safariOpdracht index als deze buiten de nieuwe lijst valt
+    if (safariOmgeving === "leerkracht" && safariOpdracht >= updatedMissions.length) {
+      setSafariOpdracht(0);
+    }
   };
 
   async function callGemini(base64, apiKey, prompt, timeoutMs = 35000) {
@@ -749,7 +774,8 @@ export default function App() {
       logApiCall(keys.firebaseUrl);
       let res;
       try {
-        res = await fetchWithTimeout(`https://summer-snowflake-d2dc.yoericeulemans.workers.dev/gemini?api-key=${apiKey}`, {
+        const encodedKey = encodeURIComponent(apiKey.trim());
+        res = await fetchWithTimeout(`https://summer-snowflake-d2dc.yoericeulemans.workers.dev/gemini?api-key=${encodedKey}`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ base64, prompt }),
         }, timeoutMs);
@@ -768,8 +794,6 @@ export default function App() {
         let detail = "";
         try { detail = (await res.text()).slice(0, 150); } catch (e) {}
         lastErr = new Error(`API Fout (${res.status})${detail ? ": " + detail : ""}`);
-        // 503 (te druk) en 429 (rate limit) zijn meestal tijdelijk — Google raadt
-        // zelf aan het gewoon nog eens te proberen. Eén keer opnieuw na 2,5s.
         if ((res.status === 503 || res.status === 429) && attempt < maxAttempts) {
           setLoadingMsg("Gemini heeft het even druk, nieuwe poging...");
           await new Promise((r) => setTimeout(r, 2500));
@@ -780,7 +804,18 @@ export default function App() {
 
       const data = await res.json();
       const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text || "{}";
-      return JSON.parse(rawText.replace(/```json/gi, "").replace(/```/g, "").trim());
+      
+      // Veilige JSON extractor: zoek naar de eerste '{' en de laatste '}'
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        try {
+          return JSON.parse(jsonMatch[0]);
+        } catch (e) {
+          console.error("JSON Parse Error van Gemini:", e, rawText);
+          throw new Error("Ongeldig antwoordformaat van de AI.");
+        }
+      }
+      throw new Error("Geen geldig JSON-antwoord gevonden in AI-respons.");
     }
 
     throw lastErr;
@@ -802,7 +837,7 @@ export default function App() {
     const errors = [];
 
     const plantIdPromise = plantId
-      ? fetchWithTimeout(`https://plant.id/api/v3/identification?api-key=${plantId}`, {
+      ? fetchWithTimeout(`https://plant.id/api/v3/identification?api-key=${encodeURIComponent(plantId.trim())}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -824,7 +859,8 @@ export default function App() {
           const form = new FormData();
           form.append("images", blob);
           form.append("organs", "auto");
-          const netRes = await fetchWithTimeout(`https://my-api.plantnet.org/v2/identify/all?api-key=${plantNet}`, { method: "POST", body: form }, 13000);
+          const encodedNetKey = encodeURIComponent(plantNet.trim());
+          const netRes = await fetchWithTimeout(`https://my-api.plantnet.org/v2/identify/all?api-key=${encodedNetKey}`, { method: "POST", body: form }, 13000);
           if (!netRes.ok) throw new Error(`HTTP ${netRes.status}`);
           return netRes.json();
         })().catch((e) => {
@@ -1131,6 +1167,18 @@ export default function App() {
             inputMode="numeric"
             value={pinInput}
             onChange={(e) => setPinInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                if (pinInput === keys.teacherPin || pinInput === DEVELOPER_OVERRIDE_PIN) {
+                  setSettingsUnlocked(true);
+                  setPinError("");
+                  setScreen("keys");
+                } else {
+                  setPinError("Onjuiste PIN-code, probeer opnieuw.");
+                }
+                setPinInput("");
+              }
+            }}
             placeholder="••••"
           />
           {pinError && <div style={{ color: "#ff6b6b", marginBottom: 12 }}>{pinError}</div>}
